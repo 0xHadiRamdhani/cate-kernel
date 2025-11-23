@@ -60,7 +60,7 @@ Pentesting Kernel is a specialized operating system kernel designed specifically
 ### Visual Architecture Diagram
 
 #### Architecture Overview
-![CATE-Kernel Architecture](diagram.png)
+![CATE-Kernel Architecture](docs/diagram.png)
 
 *Layered architecture diagram showing the complete system structure from boot layer to user applications*
 
