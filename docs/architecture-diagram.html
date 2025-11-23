@@ -4,15 +4,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CATE-Kernel Architecture Diagram</title>
+    <title>CATE-Kernel Architecture Diagram - Red Theme</title>
     <style>
         body {
             font-family: 'Courier New', monospace;
-            background: linear-gradient(135deg, #1a1a2e, #16213e, #0f3460);
-            color: #00ff00;
+            background: #000000;
+            color: #ffffff;
             margin: 0;
             padding: 20px;
             min-height: 100vh;
+            overflow-x: auto;
         }
 
         .container {
@@ -23,30 +24,49 @@
 
         h1 {
             text-align: center;
-            color: #00ff00;
+            color: #ff0000;
             font-size: 2.5em;
             margin-bottom: 30px;
-            text-shadow: 0 0 10px #00ff00;
+            text-shadow: 0 0 20px #ff0000, 0 0 40px #ff0000;
+            animation: titleGlow 2s infinite alternate;
+        }
+
+        @keyframes titleGlow {
+            from {
+                text-shadow: 0 0 20px #ff0000, 0 0 40px #ff0000;
+            }
+
+            to {
+                text-shadow: 0 0 30px #ff0000, 0 0 60px #ff0000, 0 0 80px #ff0000;
+            }
         }
 
         .layer {
             margin: 20px 0;
             padding: 15px;
-            border: 2px solid #00ff00;
+            border: 2px solid #ffffff;
             border-radius: 10px;
-            background: rgba(0, 255, 0, 0.05);
-            box-shadow: 0 0 20px rgba(0, 255, 0, 0.3);
+            background: rgba(255, 255, 255, 0.05);
+            box-shadow: 0 0 30px rgba(255, 255, 255, 0.3);
+            transition: all 0.3s ease;
+        }
+
+        .layer:hover {
+            box-shadow: 0 0 40px rgba(255, 255, 255, 0.5);
+            transform: translateY(-2px);
         }
 
         .layer-title {
-            background: linear-gradient(90deg, #00ff00, #00cc00);
-            color: #000;
+            background: linear-gradient(90deg, #ff0000, #cc0000);
+            color: #ffffff;
             padding: 10px 15px;
             margin: -15px -15px 15px -15px;
             border-radius: 8px 8px 0 0;
             font-weight: bold;
             font-size: 1.2em;
             text-align: center;
+            text-shadow: 0 0 10px #ffffff;
+            box-shadow: 0 0 15px rgba(255, 0, 0, 0.5);
         }
 
         .subsystem {
@@ -58,53 +78,66 @@
         }
 
         .component {
-            background: rgba(0, 255, 0, 0.1);
-            border: 1px solid #00ff00;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid #ffffff;
             border-radius: 8px;
             padding: 10px;
             margin: 5px;
             min-width: 200px;
             flex: 1;
+            transition: all 0.3s ease;
+        }
+
+        .component:hover {
+            background: rgba(255, 255, 255, 0.15);
+            box-shadow: 0 0 20px rgba(255, 255, 255, 0.4);
+            transform: scale(1.02);
         }
 
         .component-title {
-            color: #00ff00;
+            color: #ff0000;
             font-weight: bold;
             font-size: 1.1em;
             margin-bottom: 8px;
             text-align: center;
-            border-bottom: 1px solid #00ff00;
+            border-bottom: 1px solid #ff0000;
             padding-bottom: 5px;
+            text-shadow: 0 0 10px #ff0000;
         }
 
         .component-features {
             font-size: 0.9em;
             line-height: 1.4;
+            color: #ffffff;
         }
 
         .syscall-interface {
-            background: linear-gradient(45deg, rgba(255, 255, 0, 0.1), rgba(255, 255, 0, 0.2));
-            border: 2px solid #ffff00;
-            color: #ffff00;
+            background: linear-gradient(45deg, rgba(255, 0, 0, 0.1), rgba(255, 0, 0, 0.2));
+            border: 2px solid #ff0000;
+            color: #ffffff;
+            box-shadow: 0 0 30px rgba(255, 0, 0, 0.4);
         }
 
         .security-layer {
-            background: linear-gradient(45deg, rgba(255, 0, 0, 0.1), rgba(255, 0, 0, 0.2));
-            border: 2px solid #ff0000;
-            color: #ff0000;
+            background: linear-gradient(45deg, rgba(255, 100, 100, 0.1), rgba(255, 100, 100, 0.2));
+            border: 2px solid #ff6464;
+            color: #ffffff;
+            box-shadow: 0 0 30px rgba(255, 100, 100, 0.4);
         }
 
         .boot-layer {
-            background: linear-gradient(45deg, rgba(0, 150, 255, 0.1), rgba(0, 150, 255, 0.2));
-            border: 2px solid #0096ff;
-            color: #0096ff;
+            background: linear-gradient(45deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.2));
+            border: 2px solid #ffffff;
+            color: #ffffff;
+            box-shadow: 0 0 30px rgba(255, 255, 255, 0.4);
         }
 
         .specs {
-            background: rgba(255, 255, 255, 0.1);
-            border: 2px solid #ffffff;
+            background: rgba(255, 0, 0, 0.1);
+            border: 2px solid #ff0000;
             color: #ffffff;
             margin-top: 30px;
+            box-shadow: 0 0 30px rgba(255, 0, 0, 0.3);
         }
 
         .specs-table {
@@ -116,15 +149,35 @@
 
         .spec-label {
             font-weight: bold;
-            color: #00ff00;
+            color: #ff0000;
+            text-shadow: 0 0 5px #ff0000;
         }
 
         .arrow {
             text-align: center;
             font-size: 2em;
-            color: #00ff00;
+            color: #ffffff;
             margin: 10px 0;
-            text-shadow: 0 0 10px #00ff00;
+            text-shadow: 0 0 20px #ffffff, 0 0 40px #ffffff;
+            animation: arrowGlow 1.5s infinite;
+        }
+
+        @keyframes arrowGlow {
+
+            0%,
+            100% {
+                text-shadow: 0 0 20px #ffffff, 0 0 40px #ffffff;
+                transform: scale(1);
+            }
+
+            50% {
+                text-shadow: 0 0 30px #ffffff, 0 0 60px #ffffff, 0 0 80px #ffffff;
+                transform: scale(1.1);
+            }
+        }
+
+        .glow {
+            animation: glow 2s infinite;
         }
 
         @keyframes glow {
@@ -139,8 +192,51 @@
             }
         }
 
-        .glow {
-            animation: glow 2s infinite;
+        /* Additional glowing effects */
+        .component-title {
+            animation: componentGlow 3s infinite alternate;
+        }
+
+        @keyframes componentGlow {
+            from {
+                text-shadow: 0 0 10px #ff0000;
+            }
+
+            to {
+                text-shadow: 0 0 20px #ff0000, 0 0 30px #ff0000;
+            }
+        }
+
+        /* White glowing border for special emphasis */
+        .layer-title {
+            position: relative;
+            overflow: hidden;
+        }
+
+        .layer-title::before {
+            content: '';
+            position: absolute;
+            top: -2px;
+            left: -2px;
+            right: -2px;
+            bottom: -2px;
+            background: linear-gradient(45deg, #ff0000, #ffffff, #ff0000);
+            border-radius: 8px;
+            opacity: 0;
+            animation: borderGlow 2s infinite;
+            z-index: -1;
+        }
+
+        @keyframes borderGlow {
+
+            0%,
+            100% {
+                opacity: 0;
+            }
+
+            50% {
+                opacity: 1;
+            }
         }
     </style>
 </head>
