@@ -9,32 +9,11 @@
 #include "string.h"
 #include "common.h"
 
-/* Kernel version information */
-#define KERNEL_VERSION_MAJOR 1
-#define KERNEL_VERSION_MINOR 0
-#define KERNEL_VERSION_PATCH 0
-#define KERNEL_VERSION_STRING "1.0.0"
-
-/* Kernel build information */
-#define KERNEL_BUILD_DATE __DATE__
-#define KERNEL_BUILD_TIME __TIME__
-#define KERNEL_BUILD_COMPILER "GCC " __VERSION__
-
-/* Kernel information structure */
-typedef struct {
-    char version[32];
-    char build_date[32];
-    char build_time[32];
-    char compiler[64];
-    uint64_t start_time;
-    uint64_t memory_size;
-    uint32_t cpu_count;
-    uint32_t flags;
-} kernel_info_t;
-
 /* Global kernel state */
+static kernel_state_t kernel_state = KERNEL_STATE_UNINITIALIZED;
 static kernel_info_t kernel_info;
-static bool kernel_initialized = false;
+static kernel_config_t kernel_config;
+static kernel_stats_t kernel_stats;
 static bool kernel_panicked = false;
 
 /* Kernel panic handler */
@@ -43,6 +22,7 @@ void kernel_panic(const char* fmt, ...) {
     char buffer[1024];
     
     kernel_panicked = true;
+    kernel_state = KERNEL_STATE_PANICKED;
     
     /* Disable interrupts */
     cli();
@@ -60,9 +40,11 @@ void kernel_panic(const char* fmt, ...) {
     vga_printf("Message: %s\n", buffer);
     vga_printf("Version: %s\n", kernel_info.version);
     vga_printf("Build: %s %s\n", kernel_info.build_date, kernel_info.build_time);
+    vga_printf("State: %s\n", kernel_state_to_string(kernel_state));
     
     /* Dump debug information */
     debug_panic("Kernel panic: %s", buffer);
+    kernel_dump_debug_info();
     
     /* Halt the system */
     while (1) {
@@ -76,15 +58,40 @@ void kernel_assert_failed(const char* expr, const char* file, int line, const ch
                  expr, file, line, func);
 }
 
+/* Get kernel state */
+kernel_state_t get_kernel_state(void) {
+    return kernel_state;
+}
+
+/* Set kernel state */
+void set_kernel_state(kernel_state_t state) {
+    kernel_state = state;
+    debug_info("Kernel state changed to: %s", kernel_state_to_string(state));
+}
+
+/* Convert kernel state to string */
+const char* kernel_state_to_string(kernel_state_t state) {
+    switch (state) {
+        case KERNEL_STATE_UNINITIALIZED: return "UNINITIALIZED";
+        case KERNEL_STATE_INITIALIZING: return "INITIALIZING";
+        case KERNEL_STATE_INITIALIZED: return "INITIALIZED";
+        case KERNEL_STATE_RUNNING: return "RUNNING";
+        case KERNEL_STATE_SHUTTING_DOWN: return "SHUTTING_DOWN";
+        case KERNEL_STATE_SHUTDOWN: return "SHUTDOWN";
+        case KERNEL_STATE_PANICKED: return "PANICKED";
+        default: return "UNKNOWN";
+    }
+}
+
 /* Initialize kernel information */
 static void kernel_info_init(void) {
     memset(&kernel_info, 0, sizeof(kernel_info_t));
     
     /* Set version information */
     strncpy(kernel_info.version, KERNEL_VERSION_STRING, sizeof(kernel_info.version) - 1);
-    strncpy(kernel_info.build_date, KERNEL_BUILD_DATE, sizeof(kernel_info.build_date) - 1);
-    strncpy(kernel_info.build_time, KERNEL_BUILD_TIME, sizeof(kernel_info.build_time) - 1);
-    strncpy(kernel_info.compiler, KERNEL_BUILD_COMPILER, sizeof(kernel_info.compiler) - 1);
+    strncpy(kernel_info.build_date, __DATE__, sizeof(kernel_info.build_date) - 1);
+    strncpy(kernel_info.build_time, __TIME__, sizeof(kernel_info.build_time) - 1);
+    strncpy(kernel_info.compiler, "GCC " __VERSION__, sizeof(kernel_info.compiler) - 1);
     
     /* Set runtime information */
     kernel_info.start_time = get_timestamp();
@@ -97,6 +104,48 @@ static void kernel_info_init(void) {
     debug_info("Compiler: %s", kernel_info.compiler);
     debug_info("Memory size: %llu MB", kernel_info.memory_size / (1024 * 1024));
     debug_info("CPU count: %u", kernel_info.cpu_count);
+}
+
+/* Initialize kernel configuration */
+static void kernel_config_init(void) {
+    memset(&kernel_config, 0, sizeof(kernel_config_t));
+    
+    /* Set default configuration */
+    kernel_config.enable_debug = true;
+    kernel_config.enable_profiling = false;
+    kernel_config.enable_tracing = false;
+    kernel_config.enable_auditing = true;
+    kernel_config.enable_security = true;
+    kernel_config.enable_testing = false;
+    kernel_config.max_processes = 1000;
+    kernel_config.max_threads = 10000;
+    kernel_config.max_memory = 4ULL * 1024 * 1024 * 1024; /* 4GB */
+    kernel_config.security_level = KERNEL_SECURITY_HIGH;
+    kernel_config.log_level = 3; /* INFO level */
+    kernel_config.debug_level = 3; /* DEBUG level */
+    
+    debug_info("Kernel configuration initialized");
+}
+
+/* Initialize kernel statistics */
+static void kernel_stats_init(void) {
+    memset(&kernel_stats, 0, sizeof(kernel_stats_t));
+    
+    /* Set initial statistics */
+    kernel_stats.total_memory = kernel_info.memory_size;
+    kernel_stats.free_memory = kernel_info.memory_size;
+    kernel_stats.used_memory = 0;
+    kernel_stats.kernel_memory = 0;
+    kernel_stats.user_memory = 0;
+    kernel_stats.process_count = 0;
+    kernel_stats.thread_count = 0;
+    kernel_stats.interrupt_count = 0;
+    kernel_stats.syscall_count = 0;
+    kernel_stats.error_count = 0;
+    kernel_stats.cpu_usage = 0.0;
+    kernel_stats.memory_usage = 0.0;
+    
+    debug_info("Kernel statistics initialized");
 }
 
 /* Initialize kernel subsystems */
@@ -148,6 +197,9 @@ static void kernel_subsystems_init(void) {
 
 /* Kernel main initialization */
 void kernel_main(void) {
+    /* Set kernel state */
+    set_kernel_state(KERNEL_STATE_INITIALIZING);
+    
     /* Initialize debug system first */
     debug_init();
     debug_info("Kernel main entry point reached");
@@ -155,11 +207,18 @@ void kernel_main(void) {
     /* Initialize kernel information */
     kernel_info_init();
     
+    /* Initialize kernel configuration */
+    kernel_config_init();
+    
+    /* Initialize kernel statistics */
+    kernel_stats_init();
+    
     /* Initialize kernel subsystems */
     kernel_subsystems_init();
     
     /* Mark kernel as initialized */
     kernel_initialized = true;
+    set_kernel_state(KERNEL_STATE_INITIALIZED);
     
     /* Display welcome message */
     vga_set_color(VGA_COLOR_GREEN, VGA_COLOR_BLACK);
@@ -169,6 +228,9 @@ void kernel_main(void) {
     
     /* Enable interrupts */
     sti();
+    
+    /* Set kernel state to running */
+    set_kernel_state(KERNEL_STATE_RUNNING);
     
     /* Start kernel shell */
     kernel_shell();
@@ -211,6 +273,9 @@ void kernel_shell(void) {
         
         /* Process pending interrupts */
         process_pending_interrupts();
+        
+        /* Update kernel statistics */
+        update_kernel_stats();
     }
 }
 
@@ -240,6 +305,10 @@ void kernel_process_command(const char* command) {
         kernel_scan_command(command + 5);
     } else if (strncmp(command, "forensics ", 10) == 0) {
         kernel_forensics_command(command + 10);
+    } else if (strcmp(command, "stats") == 0) {
+        kernel_show_stats();
+    } else if (strcmp(command, "config") == 0) {
+        kernel_show_config();
     } else if (strcmp(command, "reboot") == 0) {
         kernel_reboot();
     } else if (strcmp(command, "halt") == 0) {
@@ -258,6 +327,8 @@ void kernel_show_help(void) {
     vga_printf("  memory      - Show memory information\n");
     vga_printf("  devices     - Show device information\n");
     vga_printf("  test        - Run kernel tests\n");
+    vga_printf("  stats       - Show kernel statistics\n");
+    vga_printf("  config      - Show kernel configuration\n");
     vga_printf("  clear       - Clear the screen\n");
     vga_printf("  echo <msg>  - Display a message\n");
     vga_printf("  debug <cmd> - Execute debug command\n");
@@ -277,7 +348,8 @@ void kernel_show_info(void) {
     vga_printf("  Compiler: %s\n", kernel_info.compiler);
     vga_printf("  Memory: %llu MB\n", kernel_info.memory_size / (1024 * 1024));
     vga_printf("  CPUs: %u\n", kernel_info.cpu_count);
-    vga_printf("  Uptime: %llu seconds\n", get_timestamp() - kernel_info.start_time);
+    vga_printf("  Uptime: %llu seconds\n", get_kernel_uptime());
+    vga_printf("  State: %s\n", kernel_state_to_string(kernel_state));
 }
 
 /* Show memory information */
@@ -309,6 +381,41 @@ void kernel_show_devices(void) {
     } else {
         vga_printf("  Storage: Not available\n");
     }
+}
+
+/* Show kernel statistics */
+void kernel_show_stats(void) {
+    get_kernel_stats(&kernel_stats);
+    
+    vga_printf("Kernel Statistics:\n");
+    vga_printf("  Uptime: %llu seconds\n", kernel_stats.uptime);
+    vga_printf("  Total Memory: %llu MB\n", kernel_stats.total_memory / (1024 * 1024));
+    vga_printf("  Free Memory: %llu MB\n", kernel_stats.free_memory / (1024 * 1024));
+    vga_printf("  Used Memory: %llu MB\n", kernel_stats.used_memory / (1024 * 1024));
+    vga_printf("  Process Count: %u\n", kernel_stats.process_count);
+    vga_printf("  Thread Count: %u\n", kernel_stats.thread_count);
+    vga_printf("  Interrupt Count: %u\n", kernel_stats.interrupt_count);
+    vga_printf("  Syscall Count: %u\n", kernel_stats.syscall_count);
+    vga_printf("  Error Count: %u\n", kernel_stats.error_count);
+    vga_printf("  CPU Usage: %.2f%%\n", kernel_stats.cpu_usage);
+    vga_printf("  Memory Usage: %.2f%%\n", kernel_stats.memory_usage);
+}
+
+/* Show kernel configuration */
+void kernel_show_config(void) {
+    vga_printf("Kernel Configuration:\n");
+    vga_printf("  Debug: %s\n", kernel_config.enable_debug ? "Enabled" : "Disabled");
+    vga_printf("  Profiling: %s\n", kernel_config.enable_profiling ? "Enabled" : "Disabled");
+    vga_printf("  Tracing: %s\n", kernel_config.enable_tracing ? "Enabled" : "Disabled");
+    vga_printf("  Auditing: %s\n", kernel_config.enable_auditing ? "Enabled" : "Disabled");
+    vga_printf("  Security: %s\n", kernel_config.enable_security ? "Enabled" : "Disabled");
+    vga_printf("  Testing: %s\n", kernel_config.enable_testing ? "Enabled" : "Disabled");
+    vga_printf("  Max Processes: %u\n", kernel_config.max_processes);
+    vga_printf("  Max Threads: %u\n", kernel_config.max_threads);
+    vga_printf("  Max Memory: %llu MB\n", kernel_config.max_memory / (1024 * 1024));
+    vga_printf("  Security Level: %u\n", kernel_config.security_level);
+    vga_printf("  Log Level: %u\n", kernel_config.log_level);
+    vga_printf("  Debug Level: %u\n", kernel_config.debug_level);
 }
 
 /* Run kernel tests */
@@ -367,9 +474,12 @@ void kernel_debug_command(const char* command) {
     } else if (strcmp(command, "dump") == 0) {
         dump_debug_info();
         vga_printf("Debug information dumped\n");
+    } else if (strcmp(command, "trace") == 0) {
+        kernel_dump_trace();
+        vga_printf("Trace information dumped\n");
     } else {
         vga_printf("Unknown debug command: %s\n", command);
-        vga_printf("Available debug commands: on, off, level, level <n>, dump\n");
+        vga_printf("Available debug commands: on, off, level, level <n>, dump, trace\n");
     }
 }
 
@@ -412,9 +522,70 @@ void kernel_forensics_command(const char* command) {
     }
 }
 
+/* Dump debug information */
+void kernel_dump_debug_info(void) {
+    debug_info("=== KERNEL DEBUG INFORMATION ===");
+    debug_info("State: %s", kernel_state_to_string(kernel_state));
+    debug_info("Initialized: %s", kernel_initialized ? "Yes" : "No");
+    debug_info("Panicked: %s", kernel_panicked ? "Yes" : "No");
+    debug_info("Uptime: %llu seconds", get_kernel_uptime());
+    
+    /* Dump memory information */
+    memory_info_t mem_info;
+    get_memory_info(&mem_info);
+    debug_info("Memory - Total: %llu MB, Free: %llu MB, Used: %llu MB",
+               mem_info.total_memory / (1024 * 1024),
+               mem_info.free_memory / (1024 * 1024),
+               mem_info.used_memory / (1024 * 1024));
+    
+    /* Dump interrupt information */
+    dump_interrupt_info();
+    
+    /* Dump syscall information */
+    dump_syscall_stats();
+    
+    debug_info("=== END KERNEL DEBUG INFORMATION ===");
+}
+
+/* Dump trace information */
+void kernel_dump_trace(void) {
+    debug_info("=== KERNEL TRACE INFORMATION ===");
+    /* TODO: Implement trace dumping */
+    debug_info("=== END KERNEL TRACE INFORMATION ===");
+}
+
+/* Update kernel statistics */
+static void update_kernel_stats(void) {
+    static uint64_t last_update = 0;
+    uint64_t current_time = get_timestamp();
+    
+    if (current_time - last_update >= 1000000000) { /* Update every second */
+        kernel_stats.uptime = get_kernel_uptime();
+        
+        /* Update memory statistics */
+        memory_info_t mem_info;
+        get_memory_info(&mem_info);
+        kernel_stats.total_memory = mem_info.total_memory;
+        kernel_stats.free_memory = mem_info.free_memory;
+        kernel_stats.used_memory = mem_info.used_memory;
+        kernel_stats.kernel_memory = mem_info.kernel_memory;
+        kernel_stats.user_memory = mem_info.user_memory;
+        
+        /* Calculate usage percentages */
+        if (kernel_stats.total_memory > 0) {
+            kernel_stats.memory_usage = (double)kernel_stats.used_memory / kernel_stats.total_memory * 100.0;
+        }
+        
+        last_update = current_time;
+    }
+}
+
 /* Reboot the system */
 void kernel_reboot(void) {
     vga_printf("Rebooting system...\n");
+    
+    /* Set kernel state */
+    set_kernel_state(KERNEL_STATE_SHUTTING_DOWN);
     
     /* Disable interrupts */
     cli();
@@ -435,6 +606,9 @@ void kernel_reboot(void) {
 /* Halt the system */
 void kernel_halt(void) {
     vga_printf("Halting system...\n");
+    
+    /* Set kernel state */
+    set_kernel_state(KERNEL_STATE_SHUTDOWN);
     
     /* Disable interrupts */
     cli();
@@ -470,19 +644,96 @@ uint64_t get_kernel_uptime(void) {
     return 0;
 }
 
+/* Get kernel statistics */
+void get_kernel_stats(kernel_stats_t* stats) {
+    if (stats != NULL) {
+        update_kernel_stats();
+        memcpy(stats, &kernel_stats, sizeof(kernel_stats_t));
+    }
+}
+
+/* Get kernel configuration */
+void get_kernel_config(kernel_config_t* config) {
+    if (config != NULL) {
+        memcpy(config, &kernel_config, sizeof(kernel_config_t));
+    }
+}
+
+/* Set kernel configuration */
+void set_kernel_config(const kernel_config_t* config) {
+    if (config != NULL) {
+        memcpy(&kernel_config, config, sizeof(kernel_config_t));
+        debug_info("Kernel configuration updated");
+    }
+}
+
+/* Kernel logging functions */
+void kernel_log(int level, const char* fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    
+    switch (level) {
+        case 0: debug_fatal(fmt, args); break;
+        case 1: debug_error(fmt, args); break;
+        case 2: debug_warning(fmt, args); break;
+        case 3: debug_info(fmt, args); break;
+        case 4: debug_debug(fmt, args); break;
+        case 5: debug_trace(fmt, args); break;
+        default: debug_info(fmt, args); break;
+    }
+    
+    va_end(args);
+}
+
+void kernel_error(const char* fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    debug_error(fmt, args);
+    va_end(args);
+}
+
+void kernel_warning(const char* fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    debug_warning(fmt, args);
+    va_end(args);
+}
+
+void kernel_info(const char* fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    debug_info(fmt, args);
+    va_end(args);
+}
+
+void kernel_debug(const char* fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    debug_debug(fmt, args);
+    va_end(args);
+}
+
+void kernel_trace(const char* fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    debug_trace(fmt, args);
+    va_end(args);
+}
+
 /* Kernel utility functions */
 uint64_t get_timestamp(void) {
-    /* TODO: Implement proper timestamp */
-    return 0;
+    /* TODO: Implement proper timestamp using HPET or TSC */
+    static uint64_t timestamp = 0;
+    return ++timestamp;
 }
 
 uint64_t get_total_memory(void) {
-    /* TODO: Implement proper memory detection */
+    /* TODO: Implement proper memory detection using BIOS or ACPI */
     return 64 * 1024 * 1024; /* 64MB default */
 }
 
 uint32_t get_cpu_count(void) {
-    /* TODO: Implement proper CPU detection */
+    /* TODO: Implement proper CPU detection using CPUID */
     return 1;
 }
 

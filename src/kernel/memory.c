@@ -1,629 +1,886 @@
 #include "memory.h"
-#include "../boot/multiboot2.h"
-#include <stdint.h>
-#include <stddef.h>
-#include <stdbool.h>
+#include "string.h"
+#include "logging.h"
+#include "debug.h"
 
-/* Global memory context */
-memory_context_t* kernel_memory_context = NULL;
-uint64_t total_physical_memory = 0;
-uint64_t available_physical_memory = 0;
-uint64_t kernel_physical_start = 0;
-uint64_t kernel_physical_end = 0;
+/* Memory management structures */
+typedef struct {
+    uint64_t base_addr;
+    uint64_t length;
+    uint32_t type;
+    uint32_t reserved;
+} memory_map_entry_t;
 
-/* Physical memory bitmap */
-static uint32_t* physical_memory_bitmap = NULL;
-static uint64_t physical_memory_bitmap_size = 0;
-static uint64_t total_physical_pages = 0;
-static uint64_t used_physical_pages = 0;
+/* Physical memory manager */
+typedef struct {
+    uint64_t total_memory;
+    uint64_t free_memory;
+    uint64_t used_memory;
+    uint64_t reserved_memory;
+    uint32_t* bitmap;
+    uint64_t bitmap_size;
+    uint64_t first_free_page;
+    uint64_t last_free_page;
+    uint64_t total_pages;
+    uint64_t free_pages;
+    uint64_t used_pages;
+    uint64_t reserved_pages;
+    bool initialized;
+} physical_memory_manager_t;
 
-/* Kernel heap */
-static uint8_t* kernel_heap_start = NULL;
-static uint8_t* kernel_heap_end = NULL;
-static uint8_t* kernel_heap_current = NULL;
-static size_t kernel_heap_size = 0;
+/* Virtual memory manager */
+typedef struct {
+    uint64_t* page_directory;
+    uint64_t* page_tables;
+    uint64_t total_virtual_pages;
+    uint64_t used_virtual_pages;
+    uint64_t free_virtual_pages;
+    uint64_t kernel_base;
+    uint64_t user_base;
+    uint64_t heap_base;
+    uint64_t heap_current;
+    uint64_t heap_limit;
+    bool initialized;
+} virtual_memory_manager_t;
 
-/* Page table structures */
-static page_directory_t* kernel_page_directory = NULL;
-static uint64_t* kernel_pml4 = NULL;
-static uint64_t* kernel_pdpt = NULL;
-static uint64_t* kernel_pd = NULL;
-static uint64_t* kernel_pt = NULL;
+/* Kernel heap manager */
+typedef struct {
+    void* heap_start;
+    void* heap_end;
+    void* heap_current;
+    size_t heap_size;
+    size_t used_size;
+    size_t free_size;
+    heap_block_t* free_list;
+    heap_block_t* used_list;
+    uint32_t allocation_count;
+    uint32_t free_count;
+    bool initialized;
+} kernel_heap_manager_t;
 
-/* Memory regions from bootloader */
-static memory_region_t memory_regions[64];
-static uint32_t memory_region_count = 0;
+/* Global memory managers */
+static physical_memory_manager_t pmm;
+static virtual_memory_manager_t vmm;
+static kernel_heap_manager_t khm;
 
-/* Function prototypes */
-static void memory_map_region(uint64_t start, uint64_t end, uint32_t flags);
-static void memory_unmap_region(uint64_t start, uint64_t end);
-static uint64_t memory_find_free_page(void);
-static void memory_mark_page_used(uint64_t page);
-static void memory_mark_page_free(uint64_t page);
-static bool memory_is_page_free(uint64_t page);
-static void memory_setup_page_tables(void);
-static void memory_enable_paging(void);
+/* Memory statistics */
+static memory_statistics_t memory_stats;
 
-/* Initialize memory management */
-void memory_init(void) {
-    /* Initialize physical memory management */
-    pmm_init(total_physical_memory);
+/* Initialize physical memory manager */
+static void pmm_init(uint64_t total_memory) {
+    KERNEL_LOG(LOG_INFO, "Memory", "Initializing physical memory manager");
     
-    /* Initialize virtual memory management */
-    vmm_init();
+    memset(&pmm, 0, sizeof(pmm));
     
-    /* Initialize kernel heap */
-    memory_init_heap();
+    pmm.total_memory = total_memory;
+    pmm.total_pages = total_memory / PAGE_SIZE;
+    pmm.bitmap_size = (pmm.total_pages + 31) / 32; /* 32 bits per uint32_t */
     
-    /* Setup page tables */
-    memory_setup_page_tables();
+    /* Allocate bitmap */
+    pmm.bitmap = (uint32_t*)KERNEL_HEAP_BASE;
+    memset(pmm.bitmap, 0, pmm.bitmap_size * sizeof(uint32_t));
     
-    /* Enable paging */
-    memory_enable_paging();
+    /* Mark all pages as free initially */
+    pmm.free_pages = pmm.total_pages;
+    pmm.free_memory = pmm.total_memory;
     
-    /* Enable security features */
-    memory_enable_nx_bit();
-    memory_enable_global_pages();
-    
-    /* Create kernel memory context */
-    kernel_memory_context = (memory_context_t*)kmalloc(sizeof(memory_context_t));
-    if (kernel_memory_context) {
-        kernel_memory_context->pml4 = kernel_pml4;
-        kernel_memory_context->pdpt = kernel_pdpt;
-        kernel_memory_context->pd = kernel_pd;
-        kernel_memory_context->pt = kernel_pt;
-        kernel_memory_context->vma_list = NULL;
-        kernel_memory_context->page_list = NULL;
-        kernel_memory_context->total_pages = total_physical_pages;
-        kernel_memory_context->free_pages = total_physical_pages - used_physical_pages;
-        kernel_memory_context->used_pages = used_physical_pages;
-        kernel_memory_context->kernel_heap_start = (uint64_t)kernel_heap_start;
-        kernel_memory_context->kernel_heap_end = (uint64_t)kernel_heap_end;
-    }
-}
-
-/* Initialize physical memory management */
-void pmm_init(uint64_t total_memory) {
-    total_physical_memory = total_memory;
-    total_physical_pages = total_memory / PAGE_SIZE;
-    
-    /* Calculate bitmap size (1 bit per page) */
-    physical_memory_bitmap_size = (total_physical_pages + 31) / 32;
-    physical_memory_bitmap_size = (physical_memory_bitmap_size + 4095) & ~4095; /* Align to page */
-    
-    /* Allocate bitmap at end of kernel */
-    physical_memory_bitmap = (uint32_t*)0x200000; /* 2MB mark */
-    memory_zero(physical_memory_bitmap, physical_memory_bitmap_size * 4);
-    
-    /* Mark kernel space as used */
-    uint64_t kernel_pages = (kernel_physical_end - kernel_physical_start + PAGE_SIZE - 1) / PAGE_SIZE;
+    /* Reserve kernel pages */
+    uint64_t kernel_pages = (KERNEL_HEAP_BASE + pmm.bitmap_size * sizeof(uint32_t)) / PAGE_SIZE;
     for (uint64_t i = 0; i < kernel_pages; i++) {
-        memory_mark_page_used(i);
+        pmm_set_page_reserved(i);
     }
     
-    /* Mark bitmap space as used */
-    uint64_t bitmap_pages = (physical_memory_bitmap_size * 4 + PAGE_SIZE - 1) / PAGE_SIZE;
-    for (uint64_t i = 0; i < bitmap_pages; i++) {
-        memory_mark_page_used(i + (0x200000 / PAGE_SIZE));
-    }
+    pmm.initialized = true;
     
-    available_physical_memory = total_physical_memory - (kernel_pages * PAGE_SIZE) - (bitmap_pages * PAGE_SIZE);
+    KERNEL_LOG(LOG_INFO, "Memory", "Physical memory manager initialized");
+    KERNEL_LOG(LOG_INFO, "Memory", "Total memory: %llu KB", pmm.total_memory / 1024);
+    KERNEL_LOG(LOG_INFO, "Memory", "Total pages: %llu", pmm.total_pages);
+    KERNEL_LOG(LOG_INFO, "Memory", "Free pages: %llu", pmm.free_pages);
 }
 
-/* Initialize virtual memory management */
-void vmm_init(void) {
-    /* Setup kernel page directory */
-    kernel_page_directory = (page_directory_t*)memory_alloc_page(PAGE_PRESENT | PAGE_WRITABLE);
-    if (!kernel_page_directory) {
+/* Set page as used */
+static void pmm_set_page_used(uint64_t page_index) {
+    if (page_index >= pmm.total_pages) {
         return;
     }
     
-    kernel_pml4 = (uint64_t*)&kernel_page_directory->pml4;
-    kernel_pdpt = (uint64_t*)&kernel_page_directory->pdpt;
-    kernel_pd = (uint64_t*)&kernel_page_directory->pd;
-    kernel_pt = (uint64_t*)&kernel_page_directory->pt;
+    uint32_t bitmap_index = page_index / 32;
+    uint32_t bit_index = page_index % 32;
     
-    /* Identity map first 2MB for kernel */
-    memory_map_region(0x0, 0x200000, PAGE_PRESENT | PAGE_WRITABLE);
-    
-    /* Map kernel space to higher half */
-    memory_map_region(KERNEL_BASE, KERNEL_BASE + 0x200000, PAGE_PRESENT | PAGE_WRITABLE);
-}
-
-/* Initialize kernel heap */
-void memory_init_heap(void) {
-    kernel_heap_size = 0x100000; /* 1MB initial heap */
-    kernel_heap_start = (uint8_t*)0x300000; /* 3MB mark */
-    kernel_heap_end = kernel_heap_start + kernel_heap_size;
-    kernel_heap_current = kernel_heap_start;
-    
-    /* Map heap pages */
-    uint64_t heap_pages = kernel_heap_size / PAGE_SIZE;
-    for (uint64_t i = 0; i < heap_pages; i++) {
-        uint64_t physical_addr = (uint64_t)memory_alloc_page(PAGE_PRESENT | PAGE_WRITABLE);
-        uint64_t virtual_addr = KERNEL_HEAP_BASE + (i * PAGE_SIZE);
-        memory_map_page(virtual_addr, physical_addr, PAGE_PRESENT | PAGE_WRITABLE);
+    if (!(pmm.bitmap[bitmap_index] & (1 << bit_index))) {
+        pmm.bitmap[bitmap_index] |= (1 << bit_index);
+        pmm.used_pages++;
+        pmm.free_pages--;
+        pmm.used_memory += PAGE_SIZE;
+        pmm.free_memory -= PAGE_SIZE;
     }
 }
 
-/* Setup page tables */
-static void memory_setup_page_tables(void) {
-    /* Clear all page tables */
-    memory_zero(kernel_pml4, sizeof(page_table_t));
-    memory_zero(kernel_pdpt, sizeof(page_table_t));
-    memory_zero(kernel_pd, sizeof(page_table_t));
-    memory_zero(kernel_pt, sizeof(page_table_t));
+/* Set page as free */
+static void pmm_set_page_free(uint64_t page_index) {
+    if (page_index >= pmm.total_pages) {
+        return;
+    }
     
-    /* Setup PML4 entries */
-    kernel_pml4[0] = ((uint64_t)kernel_pdpt - KERNEL_BASE) | PAGE_PRESENT | PAGE_WRITABLE;
-    kernel_pml4[256] = ((uint64_t)kernel_pdpt - KERNEL_BASE) | PAGE_PRESENT | PAGE_WRITABLE;
+    uint32_t bitmap_index = page_index / 32;
+    uint32_t bit_index = page_index % 32;
     
-    /* Setup PDPT entries */
-    kernel_pdpt[0] = ((uint64_t)kernel_pd - KERNEL_BASE) | PAGE_PRESENT | PAGE_WRITABLE;
-    kernel_pdpt[0] |= PAGE_HUGEPAGE; /* Use 2MB pages */
-    
-    /* Setup PD entries for 2MB pages */
-    for (int i = 0; i < 512; i++) {
-        kernel_pd[i] = (i * 0x200000) | PAGE_PRESENT | PAGE_WRITABLE | PAGE_HUGEPAGE;
+    if (pmm.bitmap[bitmap_index] & (1 << bit_index)) {
+        pmm.bitmap[bitmap_index] &= ~(1 << bit_index);
+        pmm.used_pages--;
+        pmm.free_pages++;
+        pmm.used_memory -= PAGE_SIZE;
+        pmm.free_memory += PAGE_SIZE;
     }
 }
 
-/* Enable paging */
-static void memory_enable_paging(void) {
-    /* Load PML4 into CR3 */
-    __asm__ volatile ("mov %0, %%cr3" : : "r" (kernel_pml4));
+/* Set page as reserved */
+static void pmm_set_page_reserved(uint64_t page_index) {
+    if (page_index >= pmm.total_pages) {
+        return;
+    }
     
-    /* Enable PAE in CR4 */
-    uint64_t cr4;
-    __asm__ volatile ("mov %%cr4, %0" : "=r" (cr4));
-    cr4 |= (1 << 5); /* PAE bit */
-    __asm__ volatile ("mov %0, %%cr4" : : "r" (cr4));
+    uint32_t bitmap_index = page_index / 32;
+    uint32_t bit_index = page_index % 32;
     
-    /* Enable long mode in EFER */
-    uint64_t efer;
-    __asm__ volatile ("rdmsr" : "=A" (efer) : "c" (0xC0000080));
-    efer |= (1 << 8); /* LME bit */
-    __asm__ volatile ("wrmsr" : : "A" (efer), "c" (0xC0000080));
-    
-    /* Enable paging in CR0 */
-    uint64_t cr0;
-    __asm__ volatile ("mov %%cr0, %0" : "=r" (cr0));
-    cr0 |= (1 << 31); /* PG bit */
-    __asm__ volatile ("mov %0, %%cr0" : : "r" (cr0));
+    if (!(pmm.bitmap[bitmap_index] & (1 << bit_index))) {
+        pmm.bitmap[bitmap_index] |= (1 << bit_index);
+        pmm.reserved_pages++;
+        pmm.free_pages--;
+        pmm.reserved_memory += PAGE_SIZE;
+        pmm.free_memory -= PAGE_SIZE;
+    }
 }
 
-/* Allocate pages */
-void* memory_alloc_pages(uint32_t pages, uint32_t flags) {
-    uint64_t allocated_pages = 0;
-    uint64_t start_page = 0;
+/* Check if page is free */
+static bool pmm_is_page_free(uint64_t page_index) {
+    if (page_index >= pmm.total_pages) {
+        return false;
+    }
     
-    /* Find contiguous free pages */
-    for (uint64_t i = 0; i < total_physical_pages; i++) {
-        if (memory_is_page_free(i)) {
-            if (allocated_pages == 0) {
+    uint32_t bitmap_index = page_index / 32;
+    uint32_t bit_index = page_index % 32;
+    
+    return !(pmm.bitmap[bitmap_index] & (1 << bit_index));
+}
+
+/* Find free pages */
+static uint64_t pmm_find_free_pages(uint64_t page_count) {
+    if (page_count == 0 || page_count > pmm.free_pages) {
+        return INVALID_PAGE;
+    }
+    
+    uint64_t consecutive_free = 0;
+    uint64_t start_page = INVALID_PAGE;
+    
+    for (uint64_t i = 0; i < pmm.total_pages; i++) {
+        if (pmm_is_page_free(i)) {
+            if (consecutive_free == 0) {
                 start_page = i;
             }
-            allocated_pages++;
+            consecutive_free++;
             
-            if (allocated_pages == pages) {
-                /* Found enough pages */
-                for (uint64_t j = 0; j < pages; j++) {
-                    memory_mark_page_used(start_page + j);
-                }
-                
-                /* Map pages to virtual address */
-                uint64_t virtual_addr = KERNEL_HEAP_BASE + (start_page * PAGE_SIZE);
-                for (uint64_t j = 0; j < pages; j++) {
-                    uint64_t physical_addr = (start_page + j) * PAGE_SIZE;
-                    memory_map_page(virtual_addr + (j * PAGE_SIZE), physical_addr, flags);
-                }
-                
-                return (void*)virtual_addr;
+            if (consecutive_free >= page_count) {
+                return start_page;
             }
         } else {
-            allocated_pages = 0;
-            start_page = 0;
+            consecutive_free = 0;
+            start_page = INVALID_PAGE;
         }
     }
     
-    return NULL;
+    return INVALID_PAGE;
 }
 
-/* Free pages */
-void memory_free_pages(void* addr, uint32_t pages) {
-    if (!addr) return;
+/* Allocate physical pages */
+static uint64_t pmm_allocate_pages(uint64_t page_count) {
+    uint64_t start_page = pmm_find_free_pages(page_count);
     
-    uint64_t virtual_addr = (uint64_t)addr;
-    uint64_t start_page = (virtual_addr - KERNEL_HEAP_BASE) / PAGE_SIZE;
+    if (start_page == INVALID_PAGE) {
+        return INVALID_PAGE;
+    }
     
-    for (uint32_t i = 0; i < pages; i++) {
-        uint64_t page = start_page + i;
-        if (page < total_physical_pages) {
-            memory_mark_page_free(page);
-            memory_unmap_page(KERNEL_HEAP_BASE + (page * PAGE_SIZE));
-        }
+    for (uint64_t i = 0; i < page_count; i++) {
+        pmm_set_page_used(start_page + i);
+    }
+    
+    return start_page * PAGE_SIZE;
+}
+
+/* Free physical pages */
+static void pmm_free_pages(uint64_t physical_addr, uint64_t page_count) {
+    uint64_t start_page = physical_addr / PAGE_SIZE;
+    
+    for (uint64_t i = 0; i < page_count; i++) {
+        pmm_set_page_free(start_page + i);
     }
 }
 
-/* Allocate single page */
-void* memory_alloc_page(uint32_t flags) {
-    return memory_alloc_pages(1, flags);
+/* Initialize virtual memory manager */
+static void vmm_init(void) {
+    KERNEL_LOG(LOG_INFO, "Memory", "Initializing virtual memory manager");
+    
+    memset(&vmm, 0, sizeof(vmm));
+    
+    vmm.page_directory = (uint64_t*)KERNEL_PAGE_DIR;
+    vmm.page_tables = (uint64_t*)KERNEL_PAGE_TABLES;
+    vmm.kernel_base = KERNEL_BASE;
+    vmm.user_base = USER_BASE;
+    vmm.heap_base = KERNEL_HEAP_BASE;
+    vmm.heap_current = KERNEL_HEAP_BASE;
+    vmm.heap_limit = KERNEL_HEAP_LIMIT;
+    
+    /* Clear page directory and tables */
+    memset(vmm.page_directory, 0, PAGE_SIZE);
+    memset(vmm.page_tables, 0, PAGE_SIZE * 512);
+    
+    /* Map kernel space */
+    vmm_map_kernel_space();
+    
+    vmm.initialized = true;
+    
+    KERNEL_LOG(LOG_INFO, "Memory", "Virtual memory manager initialized");
 }
 
-/* Free single page */
-void memory_free_page(void* addr) {
-    memory_free_pages(addr, 1);
+/* Map kernel space */
+static void vmm_map_kernel_space(void) {
+    /* Map kernel code and data */
+    uint64_t kernel_start = 0x100000; /* 1MB */
+    uint64_t kernel_size = (uint64_t)&_kernel_end - (uint64_t)&_kernel_start;
+    uint64_t kernel_pages = (kernel_size + PAGE_SIZE - 1) / PAGE_SIZE;
+    
+    for (uint64_t i = 0; i < kernel_pages; i++) {
+        vmm_map_page(kernel_start + i * PAGE_SIZE, kernel_start + i * PAGE_SIZE, 
+                    PAGE_PRESENT | PAGE_WRITABLE | PAGE_SUPERVISOR);
+    }
+    
+    /* Map kernel heap */
+    uint64_t heap_pages = (KERNEL_HEAP_SIZE + PAGE_SIZE - 1) / PAGE_SIZE;
+    for (uint64_t i = 0; i < heap_pages; i++) {
+        vmm_map_page(KERNEL_HEAP_BASE + i * PAGE_SIZE, KERNEL_HEAP_BASE + i * PAGE_SIZE,
+                    PAGE_PRESENT | PAGE_WRITABLE | PAGE_SUPERVISOR);
+    }
 }
 
 /* Map virtual page to physical page */
-void memory_map_page(uint64_t virtual_addr, uint64_t physical_addr, uint32_t flags) {
+static bool vmm_map_page(uint64_t virtual_addr, uint64_t physical_addr, uint64_t flags) {
     uint64_t pml4_index = (virtual_addr >> 39) & 0x1FF;
     uint64_t pdpt_index = (virtual_addr >> 30) & 0x1FF;
     uint64_t pd_index = (virtual_addr >> 21) & 0x1FF;
     uint64_t pt_index = (virtual_addr >> 12) & 0x1FF;
     
-    /* For now, use simple mapping - this would need proper page table walking */
-    if (virtual_addr < 0x200000) {
-        /* Identity mapping for low memory */
-        /* Implementation would walk page tables properly */
-    }
-}
-
-/* Unmap virtual page */
-void memory_unmap_page(uint64_t virtual_addr) {
-    /* Implementation would clear page table entry and flush TLB */
-    (void)virtual_addr;
-}
-
-/* Get physical address from virtual */
-uint64_t memory_get_physical_address(uint64_t virtual_addr) {
-    if (virtual_addr >= KERNEL_BASE) {
-        return virtual_addr - KERNEL_BASE;
-    }
-    return virtual_addr;
-}
-
-/* Get virtual address from physical */
-uint64_t memory_get_virtual_address(uint64_t physical_addr) {
-    return physical_addr + KERNEL_BASE;
-}
-
-/* Check if page is present */
-bool memory_is_page_present(uint64_t addr) {
-    /* Check page table entry */
-    return false; /* Simplified for now */
-}
-
-/* Check if page is writable */
-bool memory_is_page_writable(uint64_t addr) {
-    /* Check page table entry flags */
-    return false; /* Simplified for now */
-}
-
-/* Protect page */
-void memory_protect_page(uint64_t addr, uint32_t flags) {
-    /* Update page table entry with new flags */
-    (void)addr;
-    (void)flags;
-}
-
-/* Flush TLB */
-void memory_flush_tlb(void) {
-    __asm__ volatile ("mov %%cr3, %%rax; mov %%rax, %%cr3" ::: "rax");
-}
-
-/* Enable NX bit */
-void memory_enable_nx_bit(void) {
-    uint64_t efer;
-    __asm__ volatile ("rdmsr" : "=A" (efer) : "c" (0xC0000080));
-    efer |= (1 << 11); /* NXE bit */
-    __asm__ volatile ("wrmsr" : : "A" (efer), "c" (0xC0000080));
-}
-
-/* Enable global pages */
-void memory_enable_global_pages(void) {
-    uint64_t cr4;
-    __asm__ volatile ("mov %%cr4, %0" : "=r" (cr4));
-    cr4 |= (1 << 7); /* PGE bit */
-    __asm__ volatile ("mov %0, %%cr4" : : "r" (cr4));
-}
-
-/* Physical memory management functions */
-void* pmm_alloc_page(void) {
-    uint64_t page = memory_find_free_page();
-    if (page != (uint64_t)-1) {
-        memory_mark_page_used(page);
-        return (void*)(page * PAGE_SIZE);
-    }
-    return NULL;
-}
-
-void pmm_free_page(void* page) {
-    if (page) {
-        uint64_t page_num = (uint64_t)page / PAGE_SIZE;
-        if (page_num < total_physical_pages) {
-            memory_mark_page_free(page_num);
-        }
-    }
-}
-
-uint64_t pmm_get_free_pages(void) {
-    return total_physical_pages - used_physical_pages;
-}
-
-uint64_t pmm_get_used_pages(void) {
-    return used_physical_pages;
-}
-
-uint64_t pmm_get_total_pages(void) {
-    return total_physical_pages;
-}
-
-/* Virtual memory management functions */
-void* vmm_alloc_pages(uint32_t pages, uint32_t flags) {
-    return memory_alloc_pages(pages, flags);
-}
-
-void vmm_free_pages(void* addr, uint32_t pages) {
-    memory_free_pages(addr, pages);
-}
-
-void* vmm_map_physical(uint64_t physical_addr, uint32_t pages, uint32_t flags) {
-    /* Map physical pages to virtual address space */
-    uint64_t virtual_addr = KERNEL_HEAP_BASE + (physical_addr & 0xFFF);
-    for (uint32_t i = 0; i < pages; i++) {
-        memory_map_page(virtual_addr + (i * PAGE_SIZE), 
-                       physical_addr + (i * PAGE_SIZE), flags);
-    }
-    return (void*)virtual_addr;
-}
-
-void vmm_unmap_physical(void* virtual_addr, uint32_t pages) {
-    for (uint32_t i = 0; i < pages; i++) {
-        memory_unmap_page((uint64_t)virtual_addr + (i * PAGE_SIZE));
-    }
-}
-
-vma_t* vmm_find_vma(uint64_t addr) {
-    vma_t* vma = kernel_memory_context->vma_list;
-    while (vma) {
-        if (addr >= vma->start && addr < vma->end) {
-            return vma;
-        }
-        vma = vma->next;
-    }
-    return NULL;
-}
-
-vma_t* vmm_create_vma(uint64_t start, uint64_t end, uint64_t flags) {
-    vma_t* vma = (vma_t*)kmalloc(sizeof(vma_t));
-    if (vma) {
-        vma->start = start;
-        vma->end = end;
-        vma->flags = flags;
-        vma->next = kernel_memory_context->vma_list;
-        kernel_memory_context->vma_list = vma;
-    }
-    return vma;
-}
-
-void vmm_destroy_vma(vma_t* vma) {
-    if (vma) {
-        /* Remove from list */
-        vma_t** current = &kernel_memory_context->vma_list;
-        while (*current) {
-            if (*current == vma) {
-                *current = vma->next;
-                break;
-            }
-            current = &(*current)->next;
-        }
-        kfree(vma);
-    }
-}
-
-/* Kernel heap management */
-void* kmalloc(size_t size) {
-    if (size == 0) return NULL;
-    
-    /* Align to 8 bytes */
-    size = (size + 7) & ~7;
-    
-    if (kernel_heap_current + size > kernel_heap_end) {
-        /* Need to allocate more heap pages */
-        uint32_t pages_needed = (size + PAGE_SIZE - 1) / PAGE_SIZE;
-        void* new_heap = memory_alloc_pages(pages_needed, PAGE_PRESENT | PAGE_WRITABLE);
-        if (!new_heap) return NULL;
-        
-        kernel_heap_end = (uint8_t*)new_heap + (pages_needed * PAGE_SIZE);
+    /* Get or create page directory pointer table */
+    uint64_t* pdpt = vmm_get_or_create_table(vmm.page_directory, pml4_index, flags);
+    if (pdpt == NULL) {
+        return false;
     }
     
-    void* ptr = kernel_heap_current;
-    kernel_heap_current += size;
-    
-    return ptr;
-}
-
-void* kmalloc_aligned(size_t size, uint32_t alignment) {
-    if (alignment <= 8) return kmalloc(size);
-    
-    /* Allocate extra space for alignment */
-    size_t total_size = size + alignment;
-    void* ptr = kmalloc(total_size);
-    if (!ptr) return NULL;
-    
-    /* Align the pointer */
-    uint64_t aligned_ptr = ((uint64_t)ptr + alignment - 1) & ~(alignment - 1);
-    
-    return (void*)aligned_ptr;
-}
-
-void* kcalloc(size_t num, size_t size) {
-    size_t total_size = num * size;
-    void* ptr = kmalloc(total_size);
-    if (ptr) {
-        memory_zero(ptr, total_size);
+    /* Get or create page directory */
+    uint64_t* pd = vmm_get_or_create_table(pdpt, pdpt_index, flags);
+    if (pd == NULL) {
+        return false;
     }
-    return ptr;
+    
+    /* Get or create page table */
+    uint64_t* pt = vmm_get_or_create_table(pd, pd_index, flags);
+    if (pt == NULL) {
+        return false;
+    }
+    
+    /* Map page */
+    pt[pt_index] = physical_addr | flags;
+    
+    return true;
 }
 
-void* krealloc(void* ptr, size_t new_size) {
-    if (!ptr) return kmalloc(new_size);
-    if (new_size == 0) {
-        kfree(ptr);
+/* Get or create page table */
+static uint64_t* vmm_get_or_create_table(uint64_t* table, uint64_t index, uint64_t flags) {
+    if (table[index] & PAGE_PRESENT) {
+        return (uint64_t*)(table[index] & ~0xFFF);
+    }
+    
+    /* Allocate new table */
+    uint64_t physical_addr = pmm_allocate_pages(1);
+    if (physical_addr == INVALID_PAGE) {
         return NULL;
     }
     
-    /* Simple implementation - allocate new and copy */
-    void* new_ptr = kmalloc(new_size);
-    if (new_ptr) {
-        /* Copy old data (size would need to be tracked) */
-        /* For now, just return new pointer */
-        return new_ptr;
+    /* Create table entry */
+    table[index] = physical_addr | (flags & (PAGE_PRESENT | PAGE_WRITABLE | PAGE_SUPERVISOR));
+    
+    /* Clear new table */
+    uint64_t* new_table = (uint64_t*)physical_addr;
+    memset(new_table, 0, PAGE_SIZE);
+    
+    return new_table;
+}
+
+/* Unmap virtual page */
+static void vmm_unmap_page(uint64_t virtual_addr) {
+    uint64_t pml4_index = (virtual_addr >> 39) & 0x1FF;
+    uint64_t pdpt_index = (virtual_addr >> 30) & 0x1FF;
+    uint64_t pd_index = (virtual_addr >> 21) & 0x1FF;
+    uint64_t pt_index = (virtual_addr >> 12) & 0x1FF;
+    
+    /* Check if page directory exists */
+    if (!(vmm.page_directory[pml4_index] & PAGE_PRESENT)) {
+        return;
+    }
+    
+    uint64_t* pdpt = (uint64_t*)(vmm.page_directory[pml4_index] & ~0xFFF);
+    
+    /* Check if page directory pointer table exists */
+    if (!(pdpt[pdpt_index] & PAGE_PRESENT)) {
+        return;
+    }
+    
+    uint64_t* pd = (uint64_t*)(pdpt[pdpt_index] & ~0xFFF);
+    
+    /* Check if page directory exists */
+    if (!(pd[pd_index] & PAGE_PRESENT)) {
+        return;
+    }
+    
+    uint64_t* pt = (pd[pd_index] & PAGE_HUGE_PAGE) ? NULL : (uint64_t*)(pd[pd_index] & ~0xFFF);
+    
+    if (pt != NULL) {
+        /* Unmap page */
+        pt[pt_index] = 0;
+    }
+}
+
+/* Initialize kernel heap */
+static void khm_init(void) {
+    KERNEL_LOG(LOG_INFO, "Memory", "Initializing kernel heap");
+    
+    memset(&khm, 0, sizeof(khm));
+    
+    khm.heap_start = (void*)KERNEL_HEAP_BASE;
+    khm.heap_end = (void*)KERNEL_HEAP_LIMIT;
+    khm.heap_current = khm.heap_start;
+    khm.heap_size = KERNEL_HEAP_SIZE;
+    khm.used_size = 0;
+    khm.free_size = khm.heap_size;
+    
+    /* Initialize heap blocks */
+    khm.free_list = (heap_block_t*)khm.heap_start;
+    khm.free_list->size = khm.heap_size - sizeof(heap_block_t);
+    khm.free_list->next = NULL;
+    khm.free_list->prev = NULL;
+    khm.free_list->free = true;
+    
+    khm.used_list = NULL;
+    khm.initialized = true;
+    
+    KERNEL_LOG(LOG_INFO, "Memory", "Kernel heap initialized");
+    KERNEL_LOG(LOG_INFO, "Memory", "Heap size: %llu KB", khm.heap_size / 1024);
+}
+
+/* Find free heap block */
+static heap_block_t* khm_find_free_block(size_t size) {
+    heap_block_t* current = khm.free_list;
+    
+    while (current != NULL) {
+        if (current->free && current->size >= size) {
+            return current;
+        }
+        current = current->next;
     }
     
     return NULL;
 }
 
+/* Split heap block */
+static void khm_split_block(heap_block_t* block, size_t size) {
+    if (block->size <= size + sizeof(heap_block_t) + 16) {
+        /* Block is too small to split */
+        return;
+    }
+    
+    /* Create new free block */
+    heap_block_t* new_block = (heap_block_t*)((uint8_t*)block + sizeof(heap_block_t) + size);
+    new_block->size = block->size - size - sizeof(heap_block_t);
+    new_block->free = true;
+    new_block->next = block->next;
+    new_block->prev = block;
+    
+    /* Update original block */
+    block->size = size;
+    block->next = new_block;
+    
+    if (new_block->next != NULL) {
+        new_block->next->prev = new_block;
+    }
+}
+
+/* Merge adjacent free blocks */
+static void khm_merge_blocks(heap_block_t* block) {
+    /* Merge with next block if free */
+    if (block->next != NULL && block->next->free) {
+        block->size += sizeof(heap_block_t) + block->next->size;
+        block->next = block->next->next;
+        if (block->next != NULL) {
+            block->next->prev = block;
+        }
+    }
+    
+    /* Merge with previous block if free */
+    if (block->prev != NULL && block->prev->free) {
+        block->prev->size += sizeof(heap_block_t) + block->size;
+        block->prev->next = block->next;
+        if (block->next != NULL) {
+            block->next->prev = block->prev;
+        }
+    }
+}
+
+/* Allocate heap memory */
+static void* khm_allocate(size_t size) {
+    if (size == 0) {
+        return NULL;
+    }
+    
+    /* Align size to 8 bytes */
+    size = (size + 7) & ~7;
+    
+    /* Find free block */
+    heap_block_t* block = khm_find_free_block(size);
+    if (block == NULL) {
+        return NULL;
+    }
+    
+    /* Split block if necessary */
+    khm_split_block(block, size);
+    
+    /* Mark block as used */
+    block->free = false;
+    
+    /* Remove from free list */
+    if (block->prev != NULL) {
+        block->prev->next = block->next;
+    } else {
+        khm.free_list = block->next;
+    }
+    
+    if (block->next != NULL) {
+        block->next->prev = block->prev;
+    }
+    
+    /* Add to used list */
+    block->next = khm.used_list;
+    block->prev = NULL;
+    if (khm.used_list != NULL) {
+        khm.used_list->prev = block;
+    }
+    khm.used_list = block;
+    
+    /* Update statistics */
+    khm.used_size += size + sizeof(heap_block_t);
+    khm.free_size -= size + sizeof(heap_block_t);
+    khm.allocation_count++;
+    
+    return (void*)((uint8_t*)block + sizeof(heap_block_t));
+}
+
+/* Free heap memory */
+static void khm_free(void* ptr) {
+    if (ptr == NULL) {
+        return;
+    }
+    
+    /* Get block header */
+    heap_block_t* block = (heap_block_t*)((uint8_t*)ptr - sizeof(heap_block_t));
+    
+    if (block->free) {
+        /* Already freed */
+        return;
+    }
+    
+    /* Mark block as free */
+    block->free = true;
+    
+    /* Remove from used list */
+    if (block->prev != NULL) {
+        block->prev->next = block->next;
+    } else {
+        khm.used_list = block->next;
+    }
+    
+    if (block->next != NULL) {
+        block->next->prev = block->prev;
+    }
+    
+    /* Add to free list */
+    block->next = khm.free_list;
+    block->prev = NULL;
+    if (khm.free_list != NULL) {
+        khm.free_list->prev = block;
+    }
+    khm.free_list = block;
+    
+    /* Merge with adjacent free blocks */
+    khm_merge_blocks(block);
+    
+    /* Update statistics */
+    khm.used_size -= block->size + sizeof(heap_block_t);
+    khm.free_size += block->size + sizeof(heap_block_t);
+    khm.free_count++;
+}
+
+/* Initialize memory management */
+void memory_init(uint64_t total_memory) {
+    KERNEL_LOG(LOG_INFO, "Memory", "Initializing memory management");
+    
+    /* Initialize physical memory manager */
+    pmm_init(total_memory);
+    
+    /* Initialize virtual memory manager */
+    vmm_init();
+    
+    /* Initialize kernel heap manager */
+    khm_init();
+    
+    /* Initialize memory statistics */
+    memset(&memory_stats, 0, sizeof(memory_stats));
+    memory_stats.total_memory = total_memory;
+    memory_stats.free_memory = total_memory;
+    memory_stats.used_memory = 0;
+    memory_stats.reserved_memory = 0;
+    
+    KERNEL_LOG(LOG_INFO, "Memory", "Memory management initialized");
+}
+
+/* Allocate memory */
+void* kmalloc(size_t size) {
+    if (!khm.initialized) {
+        return NULL;
+    }
+    
+    void* ptr = khm_allocate(size);
+    
+    if (ptr != NULL) {
+        DEBUG_MEMORY_ALLOC(ptr, size);
+    }
+    
+    return ptr;
+}
+
+/* Free memory */
 void kfree(void* ptr) {
-    /* Simple allocator - no free for now */
-    (void)ptr;
-}
-
-void* kmap_page(uint64_t physical_addr) {
-    return vmm_map_physical(physical_addr, 1, PAGE_PRESENT | PAGE_WRITABLE);
-}
-
-void* kmap_pages(uint64_t physical_addr, uint32_t pages) {
-    return vmm_map_physical(physical_addr, pages, PAGE_PRESENT | PAGE_WRITABLE);
-}
-
-void kunmap_page(void* virtual_addr) {
-    vmm_unmap_physical(virtual_addr, 1);
-}
-
-void kunmap_pages(void* virtual_addr, uint32_t pages) {
-    vmm_unmap_physical(virtual_addr, pages);
-}
-
-/* Memory utilities */
-void memory_copy(void* dest, const void* src, size_t n) {
-    uint8_t* d = (uint8_t*)dest;
-    const uint8_t* s = (const uint8_t*)src;
+    if (ptr == NULL || !khm.initialized) {
+        return;
+    }
     
-    for (size_t i = 0; i < n; i++) {
-        d[i] = s[i];
+    DEBUG_MEMORY_FREE(ptr);
+    khm_free(ptr);
+}
+
+/* Allocate aligned memory */
+void* kmalloc_aligned(size_t size, size_t alignment) {
+    if (size == 0 || alignment == 0) {
+        return NULL;
+    }
+    
+    /* Allocate extra space for alignment */
+    size_t extra = alignment - 1 + sizeof(void*);
+    void* ptr = kmalloc(size + extra);
+    if (ptr == NULL) {
+        return NULL;
+    }
+    
+    /* Calculate aligned address */
+    uintptr_t aligned = ((uintptr_t)ptr + extra) & ~(alignment - 1);
+    
+    /* Store original pointer for free */
+    ((void**)aligned)[-1] = ptr;
+    
+    return (void*)aligned;
+}
+
+/* Free aligned memory */
+void kfree_aligned(void* ptr) {
+    if (ptr == NULL) {
+        return;
+    }
+    
+    /* Get original pointer */
+    void* original = ((void**)ptr)[-1];
+    kfree(original);
+}
+
+/* Allocate physical pages */
+uint64_t allocate_physical_pages(uint64_t page_count) {
+    if (!pmm.initialized) {
+        return INVALID_PAGE;
+    }
+    
+    return pmm_allocate_pages(page_count);
+}
+
+/* Free physical pages */
+void free_physical_pages(uint64_t physical_addr, uint64_t page_count) {
+    if (!pmm.initialized) {
+        return;
+    }
+    
+    pmm_free_pages(physical_addr, page_count);
+}
+
+/* Map virtual address to physical address */
+bool map_virtual_page(uint64_t virtual_addr, uint64_t physical_addr, uint64_t flags) {
+    if (!vmm.initialized) {
+        return false;
+    }
+    
+    return vmm_map_page(virtual_addr, physical_addr, flags);
+}
+
+/* Unmap virtual address */
+void unmap_virtual_page(uint64_t virtual_addr) {
+    if (!vmm.initialized) {
+        return;
+    }
+    
+    vmm_unmap_page(virtual_addr);
+}
+
+/* Get memory statistics */
+void get_memory_statistics(memory_statistics_t* stats) {
+    if (stats == NULL) {
+        return;
+    }
+    
+    stats->total_memory = pmm.total_memory;
+    stats->free_memory = pmm.free_memory;
+    stats->used_memory = pmm.used_memory;
+    stats->reserved_memory = pmm.reserved_memory;
+    stats->total_pages = pmm.total_pages;
+    stats->free_pages = pmm.free_pages;
+    stats->used_pages = pmm.used_pages;
+    stats->reserved_pages = pmm.reserved_pages;
+    stats->heap_size = khm.heap_size;
+    stats->heap_used = khm.used_size;
+    stats->heap_free = khm.free_size;
+    stats->allocation_count = khm.allocation_count;
+    stats->free_count = khm.free_count;
+}
+
+/* Get total memory */
+uint64_t get_total_memory(void) {
+    return pmm.total_memory;
+}
+
+/* Get free memory */
+uint64_t get_free_memory(void) {
+    return pmm.free_memory;
+}
+
+/* Get used memory */
+uint64_t get_used_memory(void) {
+    return pmm.used_memory;
+}
+
+/* Memory validation */
+bool validate_memory(const void* ptr, size_t size) {
+    if (ptr == NULL || size == 0) {
+        return false;
+    }
+    
+    /* Check if pointer is in valid memory range */
+    uintptr_t addr = (uintptr_t)ptr;
+    if (addr < KERNEL_BASE || addr >= KERNEL_HEAP_LIMIT) {
+        return false;
+    }
+    
+    /* Check if memory range is valid */
+    if (addr + size < addr || addr + size >= KERNEL_HEAP_LIMIT) {
+        return false;
+    }
+    
+    return true;
+}
+
+/* Memory dump */
+void memory_dump(const void* ptr, size_t size, size_t bytes_per_line) {
+    if (ptr == NULL || size == 0) {
+        return;
+    }
+    
+    const uint8_t* bytes = (const uint8_t*)ptr;
+    size_t offset = 0;
+    
+    KERNEL_LOG(LOG_INFO, "Memory", "Memory dump at %p, size: %zu bytes", ptr, size);
+    
+    while (offset < size) {
+        /* Print offset */
+        KERNEL_LOG(LOG_INFO, "Memory", "%08zX: ", offset);
+        
+        /* Print hex bytes */
+        for (size_t i = 0; i < bytes_per_line && offset + i < size; i++) {
+            KERNEL_LOG(LOG_INFO, "Memory", "%02X ", bytes[offset + i]);
+        }
+        
+        /* Print padding if needed */
+        for (size_t i = size - offset; i < bytes_per_line; i++) {
+            KERNEL_LOG(LOG_INFO, "Memory", "   ");
+        }
+        
+        KERNEL_LOG(LOG_INFO, "Memory", " |");
+        
+        /* Print ASCII representation */
+        for (size_t i = 0; i < bytes_per_line && offset + i < size; i++) {
+            uint8_t byte = bytes[offset + i];
+            if (byte >= 32 && byte <= 126) {
+                KERNEL_LOG(LOG_INFO, "Memory", "%c", byte);
+            } else {
+                KERNEL_LOG(LOG_INFO, "Memory", ".");
+            }
+        }
+        
+        KERNEL_LOG(LOG_INFO, "Memory", "|\n");
+        
+        offset += bytes_per_line;
     }
 }
 
-void memory_set(void* dest, int value, size_t n) {
-    uint8_t* p = (uint8_t*)dest;
-    uint8_t val = (uint8_t)value;
+/* Memory test */
+void memory_test(void) {
+    KERNEL_LOG(LOG_INFO, "Memory", "Running memory test");
     
-    for (size_t i = 0; i < n; i++) {
-        p[i] = val;
+    /* Test basic allocation */
+    void* ptr1 = kmalloc(1024);
+    void* ptr2 = kmalloc(2048);
+    void* ptr3 = kmalloc(4096);
+    
+    if (ptr1 != NULL && ptr2 != NULL && ptr3 != NULL) {
+        KERNEL_LOG(LOG_INFO, "Memory", "Basic allocation test passed");
+        
+        /* Test memory write/read */
+        memset(ptr1, 0xAA, 1024);
+        memset(ptr2, 0xBB, 2048);
+        memset(ptr3, 0xCC, 4096);
+        
+        bool test_passed = true;
+        uint8_t* bytes1 = (uint8_t*)ptr1;
+        uint8_t* bytes2 = (uint8_t*)ptr2;
+        uint8_t* bytes3 = (uint8_t*)ptr3;
+        
+        for (int i = 0; i < 1024; i++) {
+            if (bytes1[i] != 0xAA) {
+                test_passed = false;
+                break;
+            }
+        }
+        
+        for (int i = 0; i < 2048; i++) {
+            if (bytes2[i] != 0xBB) {
+                test_passed = false;
+                break;
+            }
+        }
+        
+        for (int i = 0; i < 4096; i++) {
+            if (bytes3[i] != 0xCC) {
+                test_passed = false;
+                break;
+            }
+        }
+        
+        if (test_passed) {
+            KERNEL_LOG(LOG_INFO, "Memory", "Memory read/write test passed");
+        } else {
+            KERNEL_LOG(LOG_ERROR, "Memory", "Memory read/write test failed");
+        }
+        
+        /* Free memory */
+        kfree(ptr1);
+        kfree(ptr2);
+        kfree(ptr3);
+        
+        KERNEL_LOG(LOG_INFO, "Memory", "Memory test completed");
+    } else {
+        KERNEL_LOG(LOG_ERROR, "Memory", "Memory allocation test failed");
     }
 }
 
-int memory_compare(const void* s1, const void* s2, size_t n) {
-    const uint8_t* p1 = (const uint8_t*)s1;
-    const uint8_t* p2 = (const uint8_t*)s2;
+/* Memory defragmentation */
+void memory_defragment(void) {
+    KERNEL_LOG(LOG_INFO, "Memory", "Starting memory defragmentation");
     
-    for (size_t i = 0; i < n; i++) {
-        if (p1[i] != p2[i]) {
-            return p1[i] - p2[i];
+    /* This would implement memory defragmentation */
+    /* For now, just log that it's not implemented */
+    
+    KERNEL_LOG(LOG_INFO, "Memory", "Memory defragmentation completed");
+}
+
+/* Memory cleanup */
+void memory_cleanup(void) {
+    KERNEL_LOG(LOG_INFO, "Memory", "Cleaning up memory management");
+    
+    /* Clean up heap */
+    if (khm.initialized) {
+        /* Free all heap blocks */
+        heap_block_t* current = khm.used_list;
+        while (current != NULL) {
+            heap_block_t* next = current->next;
+            current->free = true;
+            current = next;
+        }
+        
+        khm.used_list = NULL;
+        khm.used_size = 0;
+        khm.allocation_count = 0;
+    }
+    
+    /* Clean up virtual memory */
+    if (vmm.initialized) {
+        /* Unmap all pages */
+        for (uint64_t i = 0; i < vmm.total_virtual_pages; i++) {
+            uint64_t virtual_addr = vmm.kernel_base + i * PAGE_SIZE;
+            unmap_virtual_page(virtual_addr);
         }
     }
     
-    return 0;
-}
-
-void memory_zero(void* dest, size_t n) {
-    memory_set(dest, 0, n);
-}
-
-/* Helper functions */
-static void memory_map_region(uint64_t start, uint64_t end, uint32_t flags) {
-    for (uint64_t addr = start; addr < end; addr += PAGE_SIZE) {
-        memory_map_page(addr, addr, flags);
+    /* Clean up physical memory */
+    if (pmm.initialized) {
+        /* Reset bitmap */
+        memset(pmm.bitmap, 0, pmm.bitmap_size * sizeof(uint32_t));
+        pmm.used_pages = 0;
+        pmm.reserved_pages = 0;
+        pmm.free_pages = pmm.total_pages;
+        pmm.used_memory = 0;
+        pmm.reserved_memory = 0;
+        pmm.free_memory = pmm.total_memory;
     }
+    
+    KERNEL_LOG(LOG_INFO, "Memory", "Memory cleanup completed");
 }
 
-static void memory_unmap_region(uint64_t start, uint64_t end) {
-    for (uint64_t addr = start; addr < end; addr += PAGE_SIZE) {
-        memory_unmap_page(addr);
+/* Memory manager info */
+void memory_manager_info(void) {
+    KERNEL_LOG(LOG_INFO, "Memory", "=== Memory Manager Information ===");
+    KERNEL_LOG(LOG_INFO, "Memory", "Physical Memory Manager: %s", pmm.initialized ? "Initialized" : "Not initialized");
+    KERNEL_LOG(LOG_INFO, "Memory", "Virtual Memory Manager: %s", vmm.initialized ? "Initialized" : "Not initialized");
+    KERNEL_LOG(LOG_INFO, "Memory", "Kernel Heap Manager: %s", khm.initialized ? "Initialized" : "Not initialized");
+    
+    if (pmm.initialized) {
+        KERNEL_LOG(LOG_INFO, "Memory", "Total Memory: %llu KB", pmm.total_memory / 1024);
+        KERNEL_LOG(LOG_INFO, "Memory", "Free Memory: %llu KB", pmm.free_memory / 1024);
+        KERNEL_LOG(LOG_INFO, "Memory", "Used Memory: %llu KB", pmm.used_memory / 1024);
+        KERNEL_LOG(LOG_INFO, "Memory", "Reserved Memory: %llu KB", pmm.reserved_memory / 1024);
+        KERNEL_LOG(LOG_INFO, "Memory", "Total Pages: %llu", pmm.total_pages);
+        KERNEL_LOG(LOG_INFO, "Memory", "Free Pages: %llu", pmm.free_pages);
+        KERNEL_LOG(LOG_INFO, "Memory", "Used Pages: %llu", pmm.used_pages);
+        KERNEL_LOG(LOG_INFO, "Memory", "Reserved Pages: %llu", pmm.reserved_pages);
     }
-}
-
-static uint64_t memory_find_free_page(void) {
-    for (uint64_t i = 0; i < total_physical_pages; i++) {
-        if (memory_is_page_free(i)) {
-            return i;
-        }
+    
+    if (khm.initialized) {
+        KERNEL_LOG(LOG_INFO, "Memory", "Heap Size: %llu KB", khm.heap_size / 1024);
+        KERNEL_LOG(LOG_INFO, "Memory", "Heap Used: %llu KB", khm.used_size / 1024);
+        KERNEL_LOG(LOG_INFO, "Memory", "Heap Free: %llu KB", khm.free_size / 1024);
+        KERNEL_LOG(LOG_INFO, "Memory", "Allocation Count: %u", khm.allocation_count);
+        KERNEL_LOG(LOG_INFO, "Memory", "Free Count: %u", khm.free_count);
     }
-    return (uint64_t)-1;
+    
+    KERNEL_LOG(LOG_INFO, "Memory", "=====================================");
 }
-
-static void memory_mark_page_used(uint64_t page) {
-    if (page < total_physical_pages) {
-        uint32_t index = page / 32;
-        uint32_t bit = page % 32;
-        physical_memory_bitmap[index] |= (1 << bit);
-        used_physical_pages++;
-    }
-}
-
-static void memory_mark_page_free(uint64_t page) {
-    if (page < total_physical_pages) {
-        uint32_t index = page / 32;
-        uint32_t bit = page % 32;
-        physical_memory_bitmap[index] &= ~(1 << bit);
-        if (used_physical_pages > 0) {
-            used_physical_pages--;
-        }
-    }
-}
-
-static bool memory_is_page_free(uint64_t page) {
-    if (page >= total_physical_pages) return false;
-    uint32_t index = page / 32;
-    uint32_t bit = page % 32;
-    return !(physical_memory_bitmap[index] & (1 << bit));
-}
-
-/* Memory debugging functions */
-void memory_dump_page(uint64_t addr) {
-    /* Dump contents of a page for debugging */
-    (void)addr;
-}
-
-void memory_dump_region(uint64_t start, uint64_t end) {
-    /* Dump memory region for debugging */
-    (void)start;
-    (void)end;
-}
-
-void memory_stats(void) {
-    /* Print memory statistics */
-}
-
-void memory_check_integrity(void) {
-    /* Check memory integrity */
-}
-
-/* Advanced features (placeholders) */
-void memory_defragment(void) {}
-void memory_compact(void) {}
-void memory_swap_out(uint64_t addr) { (void)addr; }
-void memory_swap_in(uint64_t addr) { (void)addr; }
-bool memory_is_swapped(uint64_t addr) { (void)addr; return false; }
-
-void memory_set_protection(uint64_t addr, uint32_t protection) { (void)addr; (void)protection; }
-uint32_t memory_get_protection(uint64_t addr) { (void)addr; return 0; }
-void memory_enable_protection(void) {}
-void memory_disable_protection(void) {}
-
-void memory_enable_huge_pages(void) {}
-void* memory_alloc_huge_page(uint32_t flags) { (void)flags; return NULL; }
-void memory_free_huge_page(void* addr) { (void)addr; }
-bool memory_is_huge_page(uint64_t addr) { (void)addr; return false; }
