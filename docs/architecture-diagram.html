@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CATE-Kernel Architecture Diagram</title>
+    <style>
+        body {
+            font-family: 'Courier New', monospace;
+            background: linear-gradient(135deg, #1a1a2e, #16213e, #0f3460);
+            color: #00ff00;
+            margin: 0;
+            padding: 20px;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        h1 {
+            text-align: center;
+            color: #00ff00;
+            font-size: 2.5em;
+            margin-bottom: 30px;
+            text-shadow: 0 0 10px #00ff00;
+        }
+
+        .layer {
+            margin: 20px 0;
+            padding: 15px;
+            border: 2px solid #00ff00;
+            border-radius: 10px;
+            background: rgba(0, 255, 0, 0.05);
+            box-shadow: 0 0 20px rgba(0, 255, 0, 0.3);
+        }
+
+        .layer-title {
+            background: linear-gradient(90deg, #00ff00, #00cc00);
+            color: #000;
+            padding: 10px 15px;
+            margin: -15px -15px 15px -15px;
+            border-radius: 8px 8px 0 0;
+            font-weight: bold;
+            font-size: 1.2em;
+            text-align: center;
+        }
+
+        .subsystem {
+            display: flex;
+            justify-content: space-around;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin: 10px 0;
+        }
+
+        .component {
+            background: rgba(0, 255, 0, 0.1);
+            border: 1px solid #00ff00;
+            border-radius: 8px;
+            padding: 10px;
+            margin: 5px;
+            min-width: 200px;
+            flex: 1;
+        }
+
+        .component-title {
+            color: #00ff00;
+            font-weight: bold;
+            font-size: 1.1em;
+            margin-bottom: 8px;
+            text-align: center;
+            border-bottom: 1px solid #00ff00;
+            padding-bottom: 5px;
+        }
+
+        .component-features {
+            font-size: 0.9em;
+            line-height: 1.4;
+        }
+
+        .syscall-interface {
+            background: linear-gradient(45deg, rgba(255, 255, 0, 0.1), rgba(255, 255, 0, 0.2));
+            border: 2px solid #ffff00;
+            color: #ffff00;
+        }
+
+        .security-layer {
+            background: linear-gradient(45deg, rgba(255, 0, 0, 0.1), rgba(255, 0, 0, 0.2));
+            border: 2px solid #ff0000;
+            color: #ff0000;
+        }
+
+        .boot-layer {
+            background: linear-gradient(45deg, rgba(0, 150, 255, 0.1), rgba(0, 150, 255, 0.2));
+            border: 2px solid #0096ff;
+            color: #0096ff;
+        }
+
+        .specs {
+            background: rgba(255, 255, 255, 0.1);
+            border: 2px solid #ffffff;
+            color: #ffffff;
+            margin-top: 30px;
+        }
+
+        .specs-table {
+            display: grid;
+            grid-template-columns: 1fr 2fr;
+            gap: 10px;
+            margin-top: 15px;
+        }
+
+        .spec-label {
+            font-weight: bold;
+            color: #00ff00;
+        }
+
+        .arrow {
+            text-align: center;
+            font-size: 2em;
+            color: #00ff00;
+            margin: 10px 0;
+            text-shadow: 0 0 10px #00ff00;
+        }
+
+        @keyframes glow {
+
+            0%,
+            100% {
+                opacity: 0.7;
+            }
+
+            50% {
+                opacity: 1;
+            }
+        }
+
+        .glow {
+            animation: glow 2s infinite;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>🔒 CATE-KERNEL ARCHITECTURE 🔒</h1>
+        <div class="arrow glow">⬇</div>
+
+        <!-- User Applications Layer -->
+        <div class="layer">
+            <div class="layer-title">👤 USER APPLICATIONS LAYER</div>
+            <div class="subsystem">
+                <div class="component">
+                    <div class="component-title">🌐 NETWORK SCANNER</div>
+                    <div class="component-features">
+                        • Port Scanning (SYN, CONNECT, FIN)<br>
+                        • Vulnerability Detection<br>
+                        • OS Fingerprinting<br>
+                        • Service Identification<br>
+                        • Banner Grabbing
+                    </div>
+                </div>
+                <div class="component">
+                    <div class="component-title">💥 EXPLOIT FRAMEWORK</div>
+                    <div class="component-features">
+                        • Payload Generation<br>
+                        • Exploit Development<br>
+                        • Shellcode Creation<br>
+                        • ROP/JOP Chains<br>
+                        • Buffer Overflow Tools
+                    </div>
+                </div>
+                <div class="component">
+                    <div class="component-title">🔍 FORENSICS TOOLKIT</div>
+                    <div class="component-features">
+                        • File Carving<br>
+                        • Memory Analysis<br>
+                        • Registry Analysis<br>
+                        • Timeline Reconstruction<br>
+                        • Evidence Collection
+                    </div>
+                </div>
+                <div class="component">
+                    <div class="component-title">🛡️ SECURITY AUDIT</div>
+                    <div class="component-features">
+                        • Authentication Management<br>
+                        • Privilege Control<br>
+                        • Audit Logging<br>
+                        • IDS/IPS Integration<br>
+                        • Security Monitoring
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="arrow glow">⬇</div>
+
+        <!-- System Call Interface -->
+        <div class="layer syscall-interface">
+            <div class="layer-title">⚡ SYSTEM CALL INTERFACE (ABI)</div>
+            <div class="subsystem">
+                <div class="component">
+                    <div class="component-title">🔧 PENTESTING SYSCALLS</div>
+                    <div class="component-features">
+                        • sys_scan() - Network Scanning<br>
+                        • sys_exploit() - Exploit Execution<br>
+                        • sys_forensics() - Forensics Analysis<br>
+                        • sys_crypto() - Cryptographic Operations<br>
+                        • sys_audit() - Security Auditing<br>
+                        • sys_capture() - Packet Capture<br>
+                        • sys_inject() - Code Injection<br>
+                        • 15+ Additional Specialized Calls
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="arrow glow">⬇</div>
+
+        <!-- Kernel Core Services -->
+        <div class="layer">
+            <div class="layer-title">⚙️ KERNEL CORE SERVICES</div>
+
+            <div class="subsystem">
+                <div class="component">
+                    <div class="component-title">📋 PROCESS MANAGEMENT</div>
+                    <div class="component-features">
+                        • Task Scheduler<br>
+                        • Process Manager<br>
+                        • Thread Manager<br>
+                        • IPC Manager<br>
+                        • Signal Handler<br>
+                        • Context Switching
+                    </div>
+                </div>
+                <div class="component">
+                    <div class="component-title">💾 MEMORY MANAGEMENT</div>
+                    <div class="component-features">
+                        • Physical Memory Manager<br>
+                        • Virtual Memory Manager<br>
+                        • Kernel Heap Manager<br>
+                        • Buddy Allocator<br>
+                        • Slab Allocator<br>
+                        • Memory Protection
+                    </div>
+                </div>
+                <div class="component">
+                    <div class="component-title">🔒 SECURITY FRAMEWORK</div>
+                    <div class="component-features">
+                        • Access Control System<br>
+                        • Authentication Manager<br>
+                        • Cryptography Engine<br>
+                        • Audit Logger<br>
+                        • IDS/IPS Engine<br>
+                        • Security Validation
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="arrow glow">⬇</div>
+
+        <!-- Hardware Abstraction Layer -->
+        <div class="layer">
+            <div class="layer-title">🔌 HARDWARE ABSTRACTION LAYER</div>
+
+            <div class="subsystem">
+                <div class="component">
+                    <div class="component-title">🖥️ DEVICE DRIVERS</div>
+                    <div class="component-features">
+                        • VGA/Display Driver (Text Mode)<br>
+                        • Keyboard Driver (PS/2)<br>
+                        • Storage Driver (IDE/ATA)<br>
+                        • Network Stack (TCP/IP)<br>
+                        • Timer Driver (PIT/HPET)<br>
+                        • Serial Port Driver
+                    </div>
+                </div>
+                <div class="component">
+                    <div class="component-title">⚡ INTERRUPT HANDLING</div>
+                    <div class="component-features">
+                        • IDT Manager (256 entries)<br>
+                        • IRQ Handler (0-15)<br>
+                        • Exception Handler<br>
+                        • System Call Gate<br>
+                        • Security Validation<br>
+                        • Interrupt Routing
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="arrow glow">⬇</div>
+
+        <!-- Boot & Initialization Layer -->
+        <div class="layer boot-layer">
+            <div class="layer-title">🚀 BOOT & INITIALIZATION LAYER</div>
+            <div class="subsystem">
+                <div class="component">
+                    <div class="component-title">🔐 ADVANCED BOOT LOADER</div>
+                    <div class="component-features">
+                        • Multiboot Parser (GRUB2)<br>
+                        • ACPI Parser (RSDP, FADT, MADT)<br>
+                        • EFI Support (UEFI)<br>
+                        • Security Features (SMEP/SMAP)<br>
+                        • Module Loader (Payload)<br>
+                        • Hardware Detection<br>
+                        • Memory Map Parsing<br>
+                        • Framebuffer Setup
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Technical Specifications -->
+        <div class="layer specs">
+            <div class="layer-title">📊 TECHNICAL SPECIFICATIONS</div>
+            <div class="specs-table">
+                <div class="spec-label">Architecture:</div>
+                <div>x86_64 (64-bit)</div>
+
+                <div class="spec-label">Memory Model:</div>
+                <div>4-Level Paging with 2MB Huge Pages</div>
+
+                <div class="spec-label">Security Features:</div>
+                <div>SMEP, SMAP, NX Bit, Stack Protection</div>
+
+                <div class="spec-label">Boot Protocol:</div>
+                <div>GRUB2 Multiboot2 Specification Compliant</div>
+
+                <div class="spec-label">File System:</div>
+                <div>Custom Pentesting-Optimized FS</div>
+
+                <div class="spec-label">Network Stack:</div>
+                <div>Complete TCP/IP with Pentesting Extensions</div>
+
+                <div class="spec-label">System Calls:</div>
+                <div>20+ Specialized Pentesting Syscalls</div>
+
+                <div class="spec-label">Memory Protection:</div>
+                <div>Guard Pages, Bounds Checking, ASLR</div>
+
+                <div class="spec-label">Hardware Support:</div>
+                <div>ACPI, EFI, Legacy BIOS, UEFI</div>
+            </div>
+        </div>
+    </div>
+</body>
+
+</html>

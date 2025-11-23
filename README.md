@@ -57,37 +57,59 @@ Pentesting Kernel is a specialized operating system kernel designed specifically
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Applications Layer                       │
-├─────────────────────────────────────────────────────────────┤
-│                  Pentesting Tools Layer                     │
-│  ┌─────────────┬─────────────┬─────────────┬─────────────┐ │
-│  │   Scanner   │   Exploit   │   Forensics │   Security  │ │
-│  │   Tools     │   Framework │   Analysis │   Audit     │ │
-│  └─────────────┴─────────────┴─────────────┴─────────────┘ │
-├─────────────────────────────────────────────────────────────┤
-│                  System Call Interface                        │
-├─────────────────────────────────────────────────────────────┤
-│                    Kernel Core                              │
-│  ┌─────────────┬─────────────┬─────────────┬─────────────┐ │
-│  │   Memory    │   Interrupt │   Process   │   Security  │ │
-│  │   Manager   │   Handler   │   Manager   │   Framework │ │
-│  └─────────────┴─────────────┴─────────────┴─────────────┘ │
-├─────────────────────────────────────────────────────────────┤
-│                  Device Drivers                             │
-│  ┌─────────────┬─────────────┬─────────────┬─────────────┐ │
-│  │     VGA     │   Keyboard  │   Storage   │   Network   │ │
-│  │   Driver    │   Driver    │   Driver    │   Stack     │ │
-│  └─────────────┴─────────────┴─────────────┴─────────────┘ │
-├─────────────────────────────────────────────────────────────┤
-│                  Boot Loader                                │
-│  ┌─────────────┬─────────────┬─────────────┬─────────────┐ │
-│  │  Multiboot  │    ACPI     │    EFI      │   Security  │ │
-│  │   Support   │   Parser    │   Support   │   Features  │ │
-│  └─────────────┴─────────────┴─────────────┴─────────────┘ │
-└─────────────────────────────────────────────────────────────┘
-```
+### Visual Architecture Diagram
+
+For a detailed visual representation of the CATE-Kernel architecture, please refer to:
+
+📊 **[Interactive Architecture Diagram](docs/architecture-diagram.html)** - HTML version with interactive components and detailed specifications
+
+🖼️ **[Architecture Diagram Image](docs/diagram.png)** - Static image version for quick reference
+
+### Layered Architecture Overview
+
+The CATE-Kernel follows a sophisticated layered architecture designed specifically for penetration testing and security research:
+
+#### 1. **User Applications Layer**
+- Network Scanner Tools (Port scanning, OS detection, vulnerability scanning)
+- Exploit Framework (Payload generation, shellcode development, ROP/JOP chains)
+- Forensics Toolkit (File carving, memory analysis, registry analysis)
+- Security Audit Tools (Authentication, privilege control, IDS/IPS)
+
+#### 2. **System Call Interface (ABI)**
+- 20+ specialized pentesting system calls
+- Security-focused syscall interface
+- Optimized for penetration testing workflows
+- Memory-safe parameter validation
+
+#### 3. **Kernel Core Services**
+- **Process Management**: Scheduler, process/thread managers, IPC, signal handling
+- **Memory Management**: Physical/virtual memory managers, kernel heap, buddy/slab allocators
+- **Security Framework**: Access control, authentication, cryptography, audit logging, IDS/IPS
+
+#### 4. **Hardware Abstraction Layer**
+- **Device Drivers**: VGA/Display, Keyboard, Storage, Network, Timer drivers
+- **Interrupt & Exception Handling**: IDT management, IRQ handlers, exception handlers, system call gates
+
+#### 5. **Boot & Initialization Layer**
+- **Advanced Boot Loader**: Multiboot2 parser, ACPI parser, EFI support, security features
+- Hardware detection and initialization
+- Memory map parsing and setup
+- Security feature activation (SMEP, SMAP, NX bit)
+
+### Technical Specifications
+
+| Component | Specification |
+|-----------|---------------|
+| **Architecture** | x86_64 (64-bit) |
+| **Memory Model** | 4-Level Paging with 2MB Huge Pages |
+| **Security Features** | SMEP, SMAP, NX Bit, Stack Protection |
+| **Boot Protocol** | GRUB2 Multiboot2 Specification Compliant |
+| **File System** | Custom Pentesting-Optimized FS |
+| **Network Stack** | Complete TCP/IP with Pentesting Extensions |
+| **System Calls** | 20+ Specialized Pentesting Syscalls |
+| **Memory Protection** | Guard Pages, Bounds Checking, ASLR |
+| **Hardware Support** | ACPI, EFI, Legacy BIOS, UEFI |
+
 
 ## Building
 
