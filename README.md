@@ -59,11 +59,14 @@ Pentesting Kernel is a specialized operating system kernel designed specifically
 
 ### Visual Architecture Diagram
 
-For a detailed visual representation of the CATE-Kernel architecture, please refer to:
+#### Architecture Overview
+![CATE-Kernel Architecture](diagram.png)
+
+*Layered architecture diagram showing the complete system structure from boot layer to user applications*
+
+For a detailed interactive representation of the CATE-Kernel architecture, please refer to:
 
 📊 **[Interactive Architecture Diagram](docs/architecture-diagram.html)** - HTML version with interactive components and detailed specifications
-
-🖼️ **[Architecture Diagram Image](docs/diagram.png)** - Static image version for quick reference
 
 ### Layered Architecture Overview
 
